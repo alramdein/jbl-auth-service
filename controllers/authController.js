@@ -20,7 +20,7 @@ const login = async (req, res) => {
 
 const verifyEmail = async (req, res) => {
     try {
-        const message = await authService.verifyEmail(req.query.token);
+        const _ = await authService.verifyEmail(req.query.token);
         res.code(200).send({ message: "Email verified successfully" });
     } catch (error) {
         res.code(400).send({ error: error.message });

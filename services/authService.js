@@ -4,6 +4,7 @@ import nodemailer from "nodemailer";
 import userRepository from "../repositories/userRepository.js";
 import logger from "../utils/logger.js";
 import { mapError } from "../utils/errors.js";
+import { format } from "path";
 
 const sendVerificationEmail = async (user, token) => {
     const transporter = nodemailer.createTransport({
@@ -68,17 +69,17 @@ const loginUser = async (userData, fastify) => {
         throw new Error("Invalid email or password");
     }
 
-    // if (!user.isVerified) {
-    //     throw new Error("Email not verified");
-    // }
-
     const token = fastify.jwt.sign({ id: user._id, email: user.email });
     return { token };
 };
 
-const verifyEmail = async (req, res) => {
+const verifyEmail = async (token) => {
     try {
-        const user = await userRepository.findUserByToken(req.query.token);
+        if (token == "" || token == null || token == undefined) {
+            throw new Error("Token required");
+        }
+
+        const user = await userRepository.findUserByToken(token);
         if (!user) {
             throw new Error("Invalid or expired token");
         }
@@ -92,9 +93,9 @@ const verifyEmail = async (req, res) => {
     }
 };
 
-const forgotPassword = async (req, res) => {
+const forgotPassword = async (email) => {
     try {
-        const user = await userRepository.findUserByEmail(req.body.email);
+        const user = await userRepository.findUserByEmail(email);
         if (!user) {
             throw new Error("No account with that email address exists");
         }
@@ -129,24 +130,25 @@ const forgotPassword = async (req, res) => {
             }
         });
     } catch (error) {
-        res.code(400).send({ error: error.message });
+        logger.error(error);
+        throw error
     }
 };
 
-const resetPassword = async (req, res) => {
+const resetPassword = async (token, password) => {
     try {
-        const user = await userRepository.findUserByResetToken(req.query.token);
+        const user = await userRepository.findUserByResetToken(token);
         if (!user || user.resetPasswordExpires < Date.now()) {
             throw new Error("Invalid or expired token");
         }
 
-        const hashedPassword = await bcrypt.hash(req.body.password, 10);
+        const hashedPassword = await bcrypt.hash(password, 10);
         user.password = hashedPassword;
         user.resetPasswordToken = undefined;
         user.resetPasswordExpires = undefined;
         await user.save();
     } catch (error) {
-        logger.error(err);
+        logger.error(error);
         throw error;
     }
 };
@@ -176,6 +178,7 @@ const validateToken = async (requestHeader, fastify) => {
 };
 
 export default {
+    sendVerificationEmail,
     registerUser,
     loginUser,
     verifyEmail,

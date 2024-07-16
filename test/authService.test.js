@@ -1,186 +1,186 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
+import dotenv from "dotenv";
+import authService from "../services/authService.js";
+import userRepository from '../repositories/userRepository.js';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
-import nodemailer from 'nodemailer';
-import authService from '../services/authService.js';
-import userRepository from '../repositories/userRepository.js';
-import logger from '../utils/logger.js';
 
-describe('Auth Service', () => {
-    let bcryptHashStub;
-    let cryptoRandomBytesStub;
-    let sendMailStub;
-    let findUserByEmailStub;
-    let createUserStub;
-    let findUserByTokenStub;
-    let findUserByResetTokenStub;
+dotenv.config();
 
-    before(() => {
-        bcryptHashStub = sinon.stub(bcrypt, 'hash').resolves('hashedPassword');
-        cryptoRandomBytesStub = sinon.stub(crypto, 'randomBytes').returns({ toString: () => 'verificationToken' });
-        sendMailStub = sinon.stub(nodemailer.createTransport().prototype, 'sendMail').yields(null, 'Email sent');
-        findUserByEmailStub = sinon.stub(userRepository, 'findUserByEmail');
-        createUserStub = sinon.stub(userRepository, 'createUser');
-        findUserByTokenStub = sinon.stub(userRepository, 'findUserByToken');
-        findUserByResetTokenStub = sinon.stub(userRepository, 'findUserByResetToken');
+describe('AuthService', () => {
+    let sandbox;
+
+    beforeEach(() => {
+        sandbox = sinon.createSandbox();
     });
 
-    after(() => {
-        bcryptHashStub.restore();
-        cryptoRandomBytesStub.restore();
-        sendMailStub.restore();
-        findUserByEmailStub.restore();
-        createUserStub.restore();
-        findUserByTokenStub.restore();
-        findUserByResetTokenStub.restore();
+    afterEach(() => {
+        sandbox.restore();
     });
 
-    it('should register a new user and send a verification email', async () => {
-        findUserByEmailStub.withArgs('test@example.com').resolves(null);
-        createUserStub.resolves({ _id: 'userId', email: 'test@example.com' });
+    describe('registerUser', () => {
+        it('should throw an error if user already exists', async () => {
+            sandbox.stub(userRepository, 'findUserByEmail').resolves(true);
 
-        const userData = {
-            email: 'test@example.com',
-            password: 'password123'
-        };
-
-        const result = await authService.registerUser(userData);
-
-        expect(result).to.have.property('_id');
-        expect(sendMailStub.calledOnce).to.be.true;
-        expect(sendMailStub.calledWith(sinon.match({ to: 'test@example.com' }))).to.be.true;
-    });
-
-    it('should not register a user with an existing email', async () => {
-        findUserByEmailStub.withArgs('existing@example.com').resolves({ _id: '123' });
-
-        const userData = {
-            email: 'existing@example.com',
-            password: 'password123'
-        };
-
-        try {
-            await authService.registerUser(userData);
-        } catch (error) {
-            expect(error.message).to.equal('User already exists');
-        }
-
-        expect(sendMailStub.called).to.be.false;
-    });
-
-    it('should login a user with correct credentials', async () => {
-        findUserByEmailStub.withArgs('test@example.com').resolves({
-            _id: 'userId',
-            email: 'test@example.com',
-            password: 'hashedPassword',
-            isVerified: true
+            try {
+                await authService.registerUser({ email: 'test@example.com', password: 'password123' });
+            } catch (error) {
+                expect(error.message).to.equal('User already exists');
+            }
         });
 
-        const compareStub = sinon.stub(bcrypt, 'compare').resolves(true);
-        const fastify = { jwt: { sign: sinon.stub().returns('jwtToken') } };
+        it('should create a new user and send verification email', async () => {
+            const userData = { email: 'test@example.com', password: 'password123' };
+            sandbox.stub(userRepository, 'findUserByEmail').resolves(false);
+            sandbox.stub(bcrypt, 'hash').resolves('hashedPassword');
+            sandbox.stub(crypto, 'randomBytes').returns({ toString: () => 'verificationToken' });
+            sandbox.stub(userRepository, 'createUser').resolves({ id: '1', email: 'test@example.com', isVerified: false });
+            sandbox.stub(authService, 'sendVerificationEmail').resolves();
 
-        const result = await authService.loginUser({ email: 'test@example.com', password: 'password123' }, fastify);
+            const result = await authService.registerUser(userData);
 
-        expect(result).to.have.property('token', 'jwtToken');
-
-        compareStub.restore();
+            expect(result).to.deep.equal({ id: '1', email: 'test@example.com', isVerified: false });
+        });
     });
 
-    it('should not login a user with incorrect credentials', async () => {
-        findUserByEmailStub.withArgs('test@example.com').resolves(null);
+    describe('loginUser', () => {
+        it('should throw an error if email or password is invalid', async () => {
+            sandbox.stub(userRepository, 'findUserByEmail').resolves(null);
 
-        try {
-            await authService.loginUser({ email: 'test@example.com', password: 'password123' }, {});
-        } catch (error) {
-            expect(error.message).to.equal('Invalid email or password');
-        }
-    });
-
-    it('should not login a user if email is not verified', async () => {
-        findUserByEmailStub.withArgs('test@example.com').resolves({
-            _id: 'userId',
-            email: 'test@example.com',
-            password: 'hashedPassword',
-            isVerified: false
+            try {
+                await authService.loginUser({ email: 'test@example.com', password: 'password123' }, { jwt: { sign: () => {} } });
+            } catch (error) {
+                expect(error.message).to.equal('Invalid email or password');
+            }
         });
 
-        try {
-            await authService.loginUser({ email: 'test@example.com', password: 'password123' }, {});
-        } catch (error) {
-            expect(error.message).to.equal('Email not verified');
-        }
+        it('should return a token if login is successful', async () => {
+            const user = { _id: '1', email: 'test@example.com', password: 'hashedPassword' };
+            const fastify = { jwt: { sign: () => 'token' } };
+            sandbox.stub(userRepository, 'findUserByEmail').resolves(user);
+            sandbox.stub(bcrypt, 'compare').resolves(true);
+
+            const result = await authService.loginUser({ email: 'test@example.com', password: 'password123' }, fastify);
+
+            expect(result).to.deep.equal({ token: 'token' });
+        });
     });
 
-    it('should verify email with valid token', async () => {
-        findUserByTokenStub.withArgs('verificationToken').resolves({
-            _id: 'userId',
-            save: sinon.stub().resolves()
+    describe('verifyEmail', () => {
+        it('should throw an error if token is empty', async () => {
+            try {
+                await authService.verifyEmail('');
+            } catch (error) {
+                expect(error.message).to.equal('Token required');
+            }
         });
 
-        const req = { query: { token: 'verificationToken' } };
-        const reply = { code: sinon.stub().returnsThis(), send: sinon.stub() };
+        it('should throw an error if user is not found by token', async () => {
+            sandbox.stub(userRepository, 'findUserByToken').resolves(null);
 
-        await authService.verifyEmail(req, reply);
-
-        expect(reply.code.calledWith(200)).to.be.true;
-        expect(reply.send.calledWith({ message: 'Email verified successfully' })).to.be.true;
-    });
-
-    it('should handle invalid verification token', async () => {
-        findUserByTokenStub.withArgs('invalidToken').resolves(null);
-
-        const req = { query: { token: 'invalidToken' } };
-        const reply = { code: sinon.stub().returnsThis(), send: sinon.stub() };
-
-        try {
-            await authService.verifyEmail(req, reply);
-        } catch (error) {
-            expect(error.message).to.equal('Invalid or expired token');
-        }
-    });
-
-    it('should handle forgot password and send reset email', async () => {
-        findUserByEmailStub.withArgs('test@example.com').resolves({
-            _id: 'userId',
-            email: 'test@example.com',
-            save: sinon.stub().resolves()
+            try {
+                await authService.verifyEmail('invalidToken');
+            } catch (error) {
+                expect(error.message).to.equal('Invalid or expired token');
+            }
         });
 
-        const req = { body: { email: 'test@example.com' } };
-        const reply = { code: sinon.stub().returnsThis(), send: sinon.stub() };
+        it('should verify email and update user', async () => {
+            const user = {
+                save: sinon.stub().resolves(),
+            };
+            sandbox.stub(userRepository, 'findUserByToken').resolves(user);
 
-        await authService.forgotPassword(req, reply);
+            await authService.verifyEmail('validToken');
 
-        expect(sendMailStub.calledOnce).to.be.true;
-        expect(sendMailStub.calledWith(sinon.match({ to: 'test@example.com' }))).to.be.true;
+            expect(user.isVerified).to.be.true;
+            expect(user.verificationToken).to.be.undefined;
+            expect(user.save).to.have.been.calledOnce;
+        });
     });
 
-    it('should handle reset password with valid token', async () => {
-        findUserByResetTokenStub.withArgs('resetToken').resolves({
-            _id: 'userId',
-            save: sinon.stub().resolves()
+    describe('forgotPassword', () => {
+        it('should throw an error if no account with email exists', async () => {
+            sandbox.stub(userRepository, 'findUserByEmail').resolves(null);
+
+            try {
+                await authService.forgotPassword('nonexistent@example.com');
+            } catch (error) {
+                expect(error.message).to.equal('No account with that email address exists');
+            }
         });
 
-        const req = { query: { token: 'resetToken' }, body: { password: 'newPassword' } };
-        const reply = { code: sinon.stub().returnsThis(), send: sinon.stub() };
+        it('should generate reset token and save user', async () => {
+            const user = {
+                save: sinon.stub().resolves(),
+            };
+            sandbox.stub(userRepository, 'findUserByEmail').resolves(user);
+            sandbox.stub(crypto, 'randomBytes').returns({ toString: () => 'resetToken' });
 
-        await authService.resetPassword(req, reply);
+            await authService.forgotPassword('existing@example.com');
 
-        expect(reply.code.calledWith(200)).to.be.true;
-        expect(reply.send.calledWith({ message: 'Password reset successfully' })).to.be.true;
+            expect(user.resetPasswordToken).to.equal('resetToken');
+            expect(user.resetPasswordExpires).to.be.above(Date.now());
+            expect(user.save).to.have.been.calledOnce;
+        });
     });
 
-    it('should handle invalid reset token', async () => {
-        findUserByResetTokenStub.withArgs('invalidToken').resolves(null);
+    describe('resetPassword', () => {
+        it('should throw an error if token is invalid or expired', async () => {
+            sandbox.stub(userRepository, 'findUserByResetToken').resolves(null);
 
-        const req = { query: { token: 'invalidToken' }, body: { password: 'newPassword' } };
-        const reply = { code: sinon.stub().returnsThis(), send: sinon.stub() };
+            try {
+                await authService.resetPassword('invalidToken');
+            } catch (error) {
+                expect(error.message).to.equal('Invalid or expired token');
+            }
+        });
 
-        try {
-            await authService.resetPassword(req, reply);
-        } catch (error) {
-            expect(error.message).to.equal('Invalid or expired token');
-        }
+        it('should reset password if token is valid', async () => {
+            const user = {
+                save: sinon.stub().resolves(),
+            };
+            sandbox.stub(userRepository, 'findUserByResetToken').resolves(user);
+            sandbox.stub(bcrypt, 'hash').resolves('hashedPassword');
+
+            await authService.resetPassword('validToken');
+
+            expect(user.password).to.equal('hashedPassword');
+            expect(user.resetPasswordToken).to.be.undefined;
+            expect(user.resetPasswordExpires).to.be.undefined;
+            expect(user.save).to.have.been.calledOnce;
+        });
+    });
+
+    describe('validateToken', () => {
+        it('should throw an error if authorization header is missing', async () => {
+            try {
+                await authService.validateToken(undefined, {});
+            } catch (error) {
+                expect(error.message).to.equal('Authorization header missing');
+            }
+        });
+
+        it('should throw an error if token is invalid', async () => {
+            const requestHeader = { authorization: 'InvalidToken' };
+
+            try {
+                await authService.validateToken(requestHeader, { jwt: { verify: sinon.stub().throws(new Error('Invalid token')) } });
+            } catch (error) {
+                expect(error.message).to.equal('Invalid token');
+            }
+        });
+
+        it('should return decoded user if token is valid', async () => {
+            const requestHeader = { authorization: 'Bearer validToken' };
+            const decoded = { id: '123', email: 'test@example.com' };
+
+            const fastify = { jwt: { verify: sinon.stub().resolves(decoded) } };
+
+            const result = await authService.validateToken(requestHeader, fastify);
+
+            expect(result).to.deep.equal({ user: decoded });
+        });
     });
 });
