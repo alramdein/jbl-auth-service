@@ -27,3 +27,11 @@ If you use `gmail`, please turn on 2-Step Verification and generate the `app pas
 5. Put a name e.g. nodemailer to your app and create it.
 6. A modal dialog will appear with the password. Get that password and use it in your code.
 
+# How to run unit test
+```
+npm test
+```
+# How to run dev mode
+```
+npm run dev
+```
