@@ -6,6 +6,7 @@ const routes = async (app) => {
     app.get('/verify-email', authController.verifyEmail);
     app.post('/forgot-password', authController.forgotPassword);
     app.post('/reset-password', authController.resetPassword);
+    app.post('/validate-token', authController.validateToken);
 };
 
 export default routes;

@@ -8,6 +8,10 @@ services:
       - '27017:27017'
     volumes:
       - mongo-data:/data/db
+    networks:
+      - jubelio_networks
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --eval 'db.adminCommand(\"ping\")'"]
 
   auth-service:
     build: .
@@ -16,10 +20,18 @@ services:
       - '3000:3000'
     volumes:
       - .:/usr/src/app
+      - /usr/src/app/node_modules
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
     env_file:
       - .env
+    networks:
+      - jubelio_networks
+
+networks:
+  jubelio_networks:
+    external: true
 
 volumes:
   mongo-data:
